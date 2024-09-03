@@ -237,6 +237,12 @@ func InversionWorkOrder(c *gin.Context) {
 		userInfo          system.SysUser
 		currentUserInfo   system.SysUser
 		costDurationValue int64
+		processInfo       process.Info
+		noticeList        []int
+		sendToUserList    []system.SysUser
+		workOrderTplData  []*process.TplData
+		env               string
+		planTime          string
 		params            struct {
 			WorkOrderId int    `json:"work_order_id"`
 			NodeId      string `json:"node_id"`
@@ -342,16 +348,94 @@ func InversionWorkOrder(c *gin.Context) {
 
 	tx.Commit()
 
-	app.OK(c, nil, "工单已手动结单")
+	// 获取流程信息
+	err = orm.Eloquent.Model(&process.Info{}).Where("id = ?", workOrderInfo.Process).Find(&processInfo).Error
+	if err != nil {
+		return
+	}
+
+	// 获取流程通知类型列表
+	err = json.Unmarshal(processInfo.Notice, &noticeList)
+	if err != nil {
+		return
+	}
+
+	// 发送通知
+	if len(noticeList) > 0 {
+		// 获取当前工单处理人信息
+		newStateList := make([]interface{}, 0)
+		for _, v := range stateList {
+			newStateList = append(newStateList, v)
+		}
+		sendToUserList, err = service.GetPrincipalUserInfo(newStateList, workOrderInfo.Creator)
+		if err != nil {
+			return
+		}
+
+		// 获取工单当前流程
+		currentProcess := service.GetCurrentProcess(newStateList)
+
+		// 获取工单内容
+		err = orm.Eloquent.Model(&process.TplData{}).Where("work_order = ?", params.WorkOrderId).Find(&workOrderTplData).Error
+		if err != nil {
+			err = fmt.Errorf("查询工单数据失败, %s", err.Error())
+			return
+		}
+
+		for _, data := range workOrderTplData {
+			var formTplData map[string]interface{}
+			err = json.Unmarshal(data.FormData, &formTplData)
+			if err != nil {
+				return
+			}
+
+			if formTplData["env"] != nil && formTplData["plan_time"] != nil {
+				env = formTplData["env"].(string)
+				planTime = formTplData["plan_time"].(string)
+				break
+			}
+		}
+
+		// 发送提醒
+		bodyData := notify.BodyData{
+			SendTo: map[string]interface{}{
+				"userList": sendToUserList,
+			},
+			Subject:        "您有一条转交工单，请及时处理",
+			Description:    "您有一条待办工单，请及时处理，工单描述如下",
+			Classify:       noticeList,
+			ProcessId:      workOrderInfo.Process,
+			Id:             workOrderInfo.Id,
+			Title:          workOrderInfo.Title,
+			Creator:        userInfo.NickName,
+			Priority:       workOrderInfo.Priority,
+			CreatedAt:      workOrderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
+			CurrentProcess: currentProcess,
+			Env:            env,
+			PlanTime:       planTime,
+		}
+		err = bodyData.SendNotify()
+		if err != nil {
+			app.Error(c, -1, err, fmt.Sprintf("转交提醒发送失败，%v", err.Error()))
+			return
+		}
+	}
+
+	app.OK(c, nil, "工单已手动转交")
 }
 
 // 催办工单
 func UrgeWorkOrder(c *gin.Context) {
 	var (
-		workOrderInfo  process.WorkOrderInfo
-		sendToUserList []system.SysUser
-		stateList      []interface{}
-		userInfo       system.SysUser
+		workOrderInfo    process.WorkOrderInfo
+		sendToUserList   []system.SysUser
+		stateList        []interface{}
+		userInfo         system.SysUser
+		processInfo      process.Info
+		noticeList       []int
+		workOrderTplData []*process.TplData
+		env              string
+		planTime         string
 	)
 	workOrderId := c.DefaultQuery("workOrderId", "")
 	if workOrderId == "" {
@@ -379,6 +463,12 @@ func UrgeWorkOrder(c *gin.Context) {
 		return
 	}
 	sendToUserList, err = service.GetPrincipalUserInfo(stateList, workOrderInfo.Creator)
+	if err != nil {
+		return
+	}
+
+	// 获取工单当前流程
+	currentProcess := service.GetCurrentProcess(stateList)
 
 	// 查询创建人信息
 	err = orm.Eloquent.Model(&system.SysUser{}).Where("user_id = ?", workOrderInfo.Creator).Find(&userInfo).Error
@@ -387,25 +477,64 @@ func UrgeWorkOrder(c *gin.Context) {
 		return
 	}
 
-	// 发送催办提醒
-	bodyData := notify.BodyData{
-		SendTo: map[string]interface{}{
-			"userList": sendToUserList,
-		},
-		Subject:     "您被催办工单了，请及时处理。",
-		Description: "您有一条待办工单，请及时处理，工单描述如下",
-		Classify:    []int{1}, // todo 1 表示邮箱，后续添加了其他的在重新补充
-		ProcessId:   workOrderInfo.Process,
-		Id:          workOrderInfo.Id,
-		Title:       workOrderInfo.Title,
-		Creator:     userInfo.NickName,
-		Priority:    workOrderInfo.Priority,
-		CreatedAt:   workOrderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
-	}
-	err = bodyData.SendNotify()
+	// 获取流程信息
+	err = orm.Eloquent.Model(&process.Info{}).Where("id = ?", workOrderInfo.Process).Find(&processInfo).Error
 	if err != nil {
-		app.Error(c, -1, err, fmt.Sprintf("催办提醒发送失败，%v", err.Error()))
 		return
+	}
+
+	// 获取流程通知类型列表
+	err = json.Unmarshal(processInfo.Notice, &noticeList)
+	if err != nil {
+		return
+	}
+
+	// 获取工单内容
+	err = orm.Eloquent.Model(&process.TplData{}).Where("work_order = ?", workOrderId).Find(&workOrderTplData).Error
+	if err != nil {
+		app.Error(c, -1, err, fmt.Sprintf("查询工单数据失败, %s", err.Error()))
+		return
+	}
+
+	for _, data := range workOrderTplData {
+		var formData map[string]interface{}
+		err = json.Unmarshal(data.FormData, &formData)
+		if err != nil {
+			return
+		}
+
+		if formData["env"] != nil && formData["plan_time"] != nil {
+			env = formData["env"].(string)
+			planTime = formData["plan_time"].(string)
+			break
+		}
+	}
+
+	// 发送通知
+	if len(noticeList) > 0 {
+		// 发送催办提醒
+		bodyData := notify.BodyData{
+			SendTo: map[string]interface{}{
+				"userList": sendToUserList,
+			},
+			Subject:        "您被催办工单了，请及时处理",
+			Description:    "您有一条待办工单，请及时处理，工单描述如下",
+			Classify:       noticeList,
+			ProcessId:      workOrderInfo.Process,
+			Id:             workOrderInfo.Id,
+			Title:          workOrderInfo.Title,
+			Creator:        userInfo.NickName,
+			Priority:       workOrderInfo.Priority,
+			CreatedAt:      workOrderInfo.CreatedAt.Format("2006-01-02 15:04:05"),
+			CurrentProcess: currentProcess,
+			Env:            env,
+			PlanTime:       planTime,
+		}
+		err = bodyData.SendNotify()
+		if err != nil {
+			app.Error(c, -1, err, fmt.Sprintf("催办提醒发送失败，%v", err.Error()))
+			return
+		}
 	}
 
 	// 更新数据库

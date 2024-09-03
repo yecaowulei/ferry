@@ -435,6 +435,9 @@ func (h *Handle) HandleWorkOrder(
 			Priority int           `json:"priority"`
 			FormData []interface{} `json:"form_data"`
 		}
+		env              string
+		planTime         string
+		workOrderTplData []*process.TplData
 	)
 
 	defer func() {
@@ -820,6 +823,27 @@ func (h *Handle) HandleWorkOrder(
 		}
 	}
 
+	// 获取工单内容
+	err = orm.Eloquent.Model(&process.TplData{}).Where("work_order = ?", workOrderId).Find(&workOrderTplData).Error
+	if err != nil {
+		err = fmt.Errorf("查询工单数据失败, %s", err.Error())
+		return
+	}
+
+	for _, data := range workOrderTplData {
+		var formTplData map[string]interface{}
+		err = json.Unmarshal(data.FormData, &formTplData)
+		if err != nil {
+			return
+		}
+
+		if formTplData["env"] != nil && formTplData["plan_time"] != nil {
+			env = formTplData["env"].(string)
+			planTime = formTplData["plan_time"].(string)
+			break
+		}
+	}
+
 	bodyData := notify.BodyData{
 		SendTo: map[string]interface{}{
 			"userList": sendToUserList,
@@ -834,6 +858,8 @@ func (h *Handle) HandleWorkOrder(
 		Creator:     applyUserInfo.NickName,
 		Priority:    h.workOrderDetails.Priority,
 		CreatedAt:   h.workOrderDetails.CreatedAt.Format("2006-01-02 15:04:05"),
+		Env:         env,
+		PlanTime:    planTime,
 	}
 
 	// 判断目标是否是结束节点
@@ -870,6 +896,7 @@ func (h *Handle) HandleWorkOrder(
 			}
 			bodyData.Subject = sendSubject
 			bodyData.Description = sendDescription
+			bodyData.CurrentProcess = "结束"
 
 			// 发送通知
 			go func(bodyData notify.BodyData) {
@@ -894,11 +921,15 @@ func (h *Handle) HandleWorkOrder(
 			return
 		}
 
+		// 获取工单当前流程
+		currentProcess := GetCurrentProcess(stateList)
+
 		bodyData.SendTo = map[string]interface{}{
 			"userList": sendToUserList,
 		}
 		bodyData.Subject = sendSubject
 		bodyData.Description = sendDescription
+		bodyData.CurrentProcess = currentProcess
 
 		// 发送通知
 		go func(bodyData notify.BodyData) {
