@@ -45,5 +45,5 @@ func SendMail(mailTo []string, ccTo []string, subject, body string) {
 		logger.Info(err)
 		return
 	}
-	logger.Info("send successfully")
+	logger.Info("send email successfully")
 }

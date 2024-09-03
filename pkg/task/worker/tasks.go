@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"ferry/pkg/logger"
+	"github.com/spf13/viper"
 	"os/exec"
 	"syscall"
 
@@ -64,7 +65,8 @@ func SendTask(ctx context.Context, classify string, scriptPath string, params st
 		Value: params,
 	})
 	task, _ := tasks.NewSignature("ExecCommandTask", args)
-	task.RetryCount = 5
+
+	task.RetryCount = viper.GetInt("settings.task.retrycount")
 	_, err := AsyncTaskCenter.SendTaskWithContext(ctx, task)
 	if err != nil {
 		logger.Error(err.Error())

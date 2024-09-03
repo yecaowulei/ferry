@@ -48,6 +48,8 @@ func CreateWorkOrder(c *gin.Context) (err error) {
 			Priority int           `json:"priority"`
 			FormData []interface{} `json:"form_data"`
 		}
+		env      string
+		planTime string
 	)
 
 	err = c.ShouldBind(&workOrderValue)
@@ -225,12 +227,21 @@ func CreateWorkOrder(c *gin.Context) (err error) {
 			formDataJson      []byte
 			formStructureJson []byte
 		)
-		formDataJson, err = json.Marshal(workOrderValue.Tpls["form_data"][i])
+
+		data := workOrderValue.Tpls["form_data"][i]
+		formDataJson, err = json.Marshal(data)
 		if err != nil {
 			tx.Rollback()
 			err = fmt.Errorf("生成json字符串错误，%v", err.Error())
 			return
 		}
+
+		dataMap := data.(map[string]interface{})
+		if dataMap["env"] != nil && dataMap["plan_time"] != nil {
+			env = dataMap["env"].(string)
+			planTime = dataMap["plan_time"].(string)
+		}
+
 		formStructureJson, err = json.Marshal(workOrderValue.Tpls["form_structure"][i])
 		if err != nil {
 			tx.Rollback()
@@ -313,6 +324,9 @@ func CreateWorkOrder(c *gin.Context) (err error) {
 			return
 		}
 
+		// 获取工单当前流程
+		currentProcess := GetCurrentProcess(stateList)
+
 		// 获取需要抄送的邮件
 		emailCCList := make([]string, 0)
 		if currentNode["cc"] != nil && len(currentNode["cc"].([]interface{})) > 0 {
@@ -330,16 +344,19 @@ func CreateWorkOrder(c *gin.Context) (err error) {
 				SendTo: map[string]interface{}{
 					"userList": sendToUserList,
 				},
-				EmailCcTo:   emailCCList,
-				Subject:     "您有一条待办工单，请及时处理",
-				Description: "您有一条待办工单请及时处理，工单描述如下",
-				Classify:    noticeList,
-				ProcessId:   workOrderValue.Process,
-				Id:          workOrderInfo.Id,
-				Title:       workOrderValue.Title,
-				Creator:     userInfo.NickName,
-				Priority:    workOrderValue.Priority,
-				CreatedAt:   time.Now().Format("2006-01-02 15:04:05"),
+				EmailCcTo:      emailCCList,
+				Subject:        "您有一条待办工单，请及时处理",
+				Description:    "您有一条待办工单请及时处理，工单描述如下",
+				Classify:       noticeList,
+				ProcessId:      workOrderValue.Process,
+				Id:             workOrderInfo.Id,
+				Title:          workOrderValue.Title,
+				Creator:        userInfo.NickName,
+				Priority:       workOrderValue.Priority,
+				CreatedAt:      time.Now().Format("2006-01-02 15:04:05"),
+				CurrentProcess: currentProcess,
+				Env:            env,
+				PlanTime:       planTime,
 			}
 			err = bodyData.SendNotify()
 			if err != nil {

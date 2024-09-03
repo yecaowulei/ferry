@@ -135,3 +135,8 @@ func GetPrincipalUserInfo(stateList []interface{}, creator int) (userInfoList []
 
 	return
 }
+
+// 获取工单当前流程
+func GetCurrentProcess(stateList []interface{}) (currentWorkOrderProcess string) {
+	return stateList[0].(map[string]interface{})["label"].(string)
+}
